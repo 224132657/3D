@@ -1,0 +1,838 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>3D列印報價計算</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&display=swap" rel="stylesheet">
+    <style>
+        /* --- 修正 Safari 上下邊問題的關鍵 --- */
+        html {
+            background-color: #e0e7ff; /* 預設底色，會被 JS 覆蓋 */
+            height: 100%;
+            overflow: hidden; /* 禁止 html 層級滾動 */
+        }
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100dvh; /* 使用動態高度 */
+            overflow: hidden; /* 禁止 body 層級滾動 */
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif;
+            color: #1e293b;
+            /* 讓 body 背景透明，透出後面的 html 背景或 blob */
+            background-color: transparent; 
+        }
+
+        /* --- 液態背景動畫 (放大並固定) --- */
+        .blob-cont {
+            position: fixed;
+            /* 讓背景比螢幕大很多，解決邊緣留白 */
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            z-index: -1;
+            /* background 由 JS 動態控制 */
+            background: transparent; 
+            pointer-events: none; /* 讓點擊穿透 */
+        }
+        
+        .blob {
+            position: absolute;
+            border-radius: 50%;
+            filter: blur(80px); /* 模糊度 */
+            opacity: 0.8;
+            animation: move 20s infinite alternate;
+            /* 寬高與背景色現在由 JS 動態控制，這裡只留定位 */
+        }
+        
+        .blob:nth-child(1) { top: 20%; left: 20%; animation-duration: 25s; }
+        .blob:nth-child(2) { bottom: 20%; right: 20%; animation-duration: 30s; animation-direction: alternate-reverse; }
+        .blob:nth-child(3) { top: 40%; left: 45%; animation-duration: 20s; }
+
+        @keyframes move {
+            from { transform: translate(0, 0) scale(1) rotate(0deg); }
+            to { transform: translate(40px, -40px) scale(1.1) rotate(20deg); }
+        }
+
+        /* --- 玻璃擬態 (Glassmorphism) --- */
+        .glass-panel {
+            background: rgba(255, 255, 255, 0.45);
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.6);
+            box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.15);
+        }
+        
+        .glass-card {
+            background: rgba(255, 255, 255, 0.5);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
+            transition: transform 0.2s, background 0.2s;
+        }
+        
+        .glass-card:active {
+            transform: scale(0.98);
+            background: rgba(255, 255, 255, 0.7);
+        }
+
+        /* 折疊內容樣式 */
+        details > summary {
+            list-style: none;
+        }
+        details > summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .glass-input {
+            background: rgba(255, 255, 255, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+            transition: all 0.3s;
+        }
+        .glass-input:focus {
+            background: rgba(255, 255, 255, 0.8);
+            border-color: rgba(167, 139, 250, 0.5);
+            box-shadow: 0 0 0 3px rgba(167, 139, 250, 0.2);
+        }
+
+        /* --- 自定義滑桿 --- */
+        input[type=range] { -webkit-appearance: none; width: 100%; background: transparent; }
+        input[type=range]::-webkit-slider-runnable-track {
+            width: 100%; height: 8px; cursor: pointer;
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 4px;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.1);
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none; height: 24px; width: 24px; border-radius: 50%;
+            background: linear-gradient(135deg, #ffffff, #e0e7ff);
+            cursor: pointer; margin-top: -8px;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.2), 0 0 0 1px rgba(255,255,255,0.8);
+            border: 1px solid rgba(0,0,0,0.05);
+        }
+
+        /* --- 其他 --- */
+        input[type=number]::-webkit-inner-spin-button, input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+        .scrollbar-hide::-webkit-scrollbar { display: none; }
+        .animate-fade-in { animation: fadeIn 0.4s cubic-bezier(0.2, 0.8, 0.2, 1); }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        
+        .page-transition { transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.4s; }
+    </style>
+</head>
+<!-- 修改這裡：將 items-center 改為 sm:items-center，讓手機版預設靠上對齊，填滿頂部 -->
+<body class="flex justify-center sm:items-center p-0 sm:p-6 w-full h-full relative">
+
+    <!-- 動態流體背景 -->
+    <div class="blob-cont" id="blobContainer">
+        <div class="blob"></div>
+        <div class="blob"></div>
+        <div class="blob"></div>
+    </div>
+
+    <!-- 主容器：將高度從 85vh 增加到 95vh，讓視窗更滿版 -->
+    <div class="w-full h-full sm:h-[95vh] sm:max-w-md glass-panel sm:rounded-[2.5rem] overflow-hidden flex flex-col relative shadow-[0_20px_50px_rgba(0,0,0,0.2)] z-10">
+        
+        <!-- === 首頁 (Main Page) === -->
+        <div id="mainPage" class="flex flex-col h-full w-full absolute inset-0 z-10 page-transition bg-white/10">
+            
+            <!-- Header -->
+            <div class="p-6 flex justify-between items-center flex-shrink-0 pt-safe-top">
+                <div class="flex flex-col">
+                    <span class="text-xs font-bold tracking-[0.2em] text-gray-500 uppercase mb-1">報價小幫手</span>
+                    <h1 class="text-2xl font-extrabold bg-clip-text text-transparent bg-gradient-to-r from-slate-700 to-slate-900 drop-shadow-sm">
+                        3D列印報價計算
+                    </h1>
+                </div>
+                <button onclick="openSettings()" class="w-10 h-10 rounded-full glass-card flex items-center justify-center text-slate-600 hover:text-slate-900 hover:bg-white/60 relative group">
+                    <i class="fas fa-cog text-lg transition-transform group-hover:rotate-90 duration-500"></i>
+                    <span id="settingsBadge" class="hidden absolute -top-1 -right-1 w-4 h-4 bg-rose-500/90 text-white rounded-full border-2 border-white text-[9px] font-bold flex items-center justify-center shadow-sm"></span>
+                </button>
+            </div>
+
+            <!-- Scrollable Content -->
+            <div class="px-6 pb-24 overflow-y-auto flex-grow scrollbar-hide space-y-5">
+                
+                <!-- 專案名稱 -->
+                <div class="glass-card rounded-2xl p-1 flex items-center">
+                    <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-100 to-white flex items-center justify-center text-indigo-500 shadow-sm ml-1">
+                        <i class="fas fa-tag"></i>
+                    </div>
+                    <input type="text" id="projectName" placeholder="請輸入專案名稱" 
+                           class="w-full bg-transparent p-3 text-base font-bold text-slate-700 placeholder-slate-400/70 focus:outline-none">
+                </div>
+
+                <!-- 1. 耗材清單 -->
+                <div class="glass-card rounded-3xl p-5 space-y-4">
+                    <div class="flex items-center justify-between">
+                        <h2 class="text-slate-600 font-bold text-sm tracking-wide flex items-center gap-2">
+                            <span class="w-1.5 h-1.5 rounded-full bg-blue-400"></span> 本次使用耗材
+                        </h2>
+                        <button onclick="resetPrintRows()" class="text-xs text-slate-400 hover:text-rose-500 transition-colors">
+                            <i class="fas fa-undo-alt mr-1"></i>重置
+                        </button>
+                    </div>
+
+                    <div id="printRowsContainer" class="space-y-3">
+                        <!-- JS 動態生成 -->
+                    </div>
+
+                    <button onclick="addPrintRow()" class="w-full py-3 rounded-xl border border-dashed border-slate-300 text-slate-400 text-xs font-bold hover:bg-white/40 hover:text-slate-600 hover:border-slate-400 transition-all flex items-center justify-center gap-2">
+                        <i class="fas fa-plus"></i> 新增耗材
+                    </button>
+
+                    <div class="pt-2 flex justify-between items-end">
+                        <span class="text-xs font-medium text-slate-400">總重量</span>
+                        <span class="text-2xl font-bold text-slate-700 leading-none"><span id="totalWeightDisplay">0.00</span><span class="text-sm text-slate-400 ml-1 font-normal">g</span></span>
+                    </div>
+                </div>
+
+                <!-- 2. 時間與倍率 (Grid Layout) -->
+                <div class="grid grid-cols-2 gap-4">
+                    <!-- 時間 -->
+                    <div class="glass-card rounded-3xl p-4 flex flex-col justify-between h-32">
+                        <label class="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1">
+                            <i class="far fa-clock text-indigo-400"></i> 時間
+                        </label>
+                        <div class="flex items-baseline justify-center gap-1">
+                            <input type="number" id="printHours" placeholder="0" class="w-10 bg-transparent text-right text-3xl font-bold text-slate-800 outline-none p-0 placeholder-slate-300">
+                            <span class="text-xs text-slate-400 font-bold mr-1">時</span>
+                            <input type="number" id="printMinutes" placeholder="0" class="w-10 bg-transparent text-right text-3xl font-bold text-slate-800 outline-none p-0 placeholder-slate-300">
+                            <span class="text-xs text-slate-400 font-bold">分</span>
+                        </div>
+                    </div>
+
+                    <!-- 倍率 -->
+                    <div class="glass-card rounded-3xl p-4 flex flex-col justify-between h-32 relative">
+                        <!-- 移除了這裡的 overflow-hidden 以避免切字 -->
+                        <label class="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1 z-10">
+                            <i class="fas fa-chart-line text-green-500"></i> 倍率
+                        </label>
+                        
+                        <div class="flex items-center justify-center z-10">
+                            <span class="text-lg text-green-600 font-bold mr-1">x</span>
+                            <!-- 修改：w-16 改為 w-24，並加入 text-center -->
+                            <input type="number" id="profitInput" value="21" step="0.1" class="w-24 bg-transparent text-3xl font-bold text-green-700 outline-none p-0 text-center" onchange="saveConfig()" oninput="syncSlider(this.value)">
+                        </div>
+                        
+                        <div class="z-10">
+                            <input type="range" id="profitSlider" min="1" max="100" step="0.5" value="21" onchange="saveConfig()" oninput="syncInput(this.value)" class="opacity-80 hover:opacity-100 transition-opacity">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="h-6"></div>
+            </div>
+
+            <!-- Footer Floating Bar -->
+            <div class="absolute bottom-6 left-6 right-6 z-20 pb-safe-bottom">
+                <button onclick="calculate()" class="w-full bg-slate-900/90 backdrop-blur-md hover:bg-black text-white font-bold py-4 rounded-2xl shadow-[0_10px_30px_rgba(0,0,0,0.2)] transform active:scale-[0.98] transition-all duration-300 flex justify-center items-center gap-3 group border border-white/10">
+                    <span class="text-lg tracking-widest uppercase">開始計算</span>
+                    <span class="bg-white/20 rounded-full w-6 h-6 flex items-center justify-center group-hover:translate-x-1 transition-transform">
+                        <i class="fas fa-arrow-right text-xs"></i>
+                    </span>
+                </button>
+            </div>
+        </div>
+
+        <!-- === 設定頁面 (Settings Page) === -->
+        <div id="settingsPage" class="flex flex-col h-full w-full absolute inset-0 z-20 page-transition translate-x-full bg-slate-50">
+            
+            <!-- Header -->
+            <div class="p-6 flex items-center justify-between border-b border-white/20 pt-safe-top">
+                <button onclick="closeSettings()" class="w-10 h-10 rounded-full glass-card flex items-center justify-center text-slate-600 hover:bg-white/80 transition-all">
+                    <i class="fas fa-arrow-left"></i>
+                </button>
+                <h2 class="text-lg font-bold text-slate-800">系統設定</h2>
+                <div class="w-10"></div>
+            </div>
+
+            <!-- Content -->
+            <div class="p-6 overflow-y-auto flex-grow space-y-6">
+                
+                <!-- 1. 耗材資料庫 (折疊) -->
+                <details class="group glass-card rounded-3xl overflow-hidden bg-white/60" open>
+                    <summary class="flex justify-between items-center p-4 cursor-pointer list-none hover:bg-white/80 transition-colors">
+                        <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                            <span class="w-1.5 h-1.5 rounded-full bg-indigo-400"></span> 耗材資料庫
+                        </h3>
+                        <i class="fas fa-chevron-down text-slate-400 transition-transform duration-300 group-open:rotate-180"></i>
+                    </summary>
+                    
+                    <div class="p-4 pt-0 border-t border-white/20">
+                        <!-- 新增區 -->
+                        <div class="flex flex-col gap-3 my-4 bg-white/40 p-3 rounded-2xl border border-white/30">
+                            <div class="flex justify-between items-center">
+                                <span class="text-[10px] font-bold text-indigo-500 uppercase" id="formTitle">新增耗材</span>
+                                <button onclick="resetForm()" id="cancelEditBtn" class="hidden text-xs text-rose-400"><i class="fas fa-times"></i></button>
+                            </div>
+                            <div class="flex gap-2">
+                                <input type="text" id="newMatVendor" placeholder="廠商" class="glass-input w-1/3 p-2 rounded-lg text-sm text-slate-700 outline-none placeholder-slate-400/70">
+                                <input type="text" id="newMatName" placeholder="材質" class="glass-input w-2/3 p-2 rounded-lg text-sm text-slate-700 outline-none placeholder-slate-400/70">
+                            </div>
+                            <div class="flex gap-2">
+                                <div class="relative flex-grow">
+                                    <input type="number" id="newMatPrice" placeholder="價格" class="glass-input w-full p-2 pl-3 rounded-lg text-sm text-slate-700 outline-none placeholder-slate-400/70">
+                                    <span class="absolute right-3 top-2 text-[10px] text-slate-400 font-bold">NT$/KG</span>
+                                </div>
+                                <button id="addBtn" onclick="handleMaterialSubmit()" class="w-10 h-9 bg-indigo-500 hover:bg-indigo-600 text-white rounded-lg shadow-lg shadow-indigo-500/30 flex items-center justify-center transition-all">
+                                    <i class="fas fa-plus"></i>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- 列表區 -->
+                        <div class="flex justify-between px-2 mb-2 text-[10px] text-slate-400 font-bold uppercase">
+                            <span>現有庫存</span>
+                            <span id="materialCount">0 筆</span>
+                        </div>
+                        <div id="materialListContainer" class="space-y-2 max-h-48 overflow-y-auto pr-1">
+                            <!-- JS 生成 -->
+                        </div>
+                    </div>
+                </details>
+
+                <!-- 2. 機器設定 (折疊) -->
+                <details class="group glass-card rounded-3xl overflow-hidden bg-white/60">
+                    <summary class="flex justify-between items-center p-4 cursor-pointer list-none hover:bg-white/80 transition-colors">
+                        <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                            <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span> 機器設定
+                        </h3>
+                        <i class="fas fa-chevron-down text-slate-400 transition-transform duration-300 group-open:rotate-180"></i>
+                    </summary>
+                    
+                    <div class="p-5 pt-0 border-t border-white/20 grid grid-cols-2 gap-4 mt-4">
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">電費 (NT$)</label>
+                            <input type="number" id="elecRate" value="2.45" onchange="saveConfig()" class="glass-input w-full p-2 rounded-xl text-slate-700 font-mono font-bold text-center">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">機價 (NT$)</label>
+                            <input type="number" id="machineCost" value="15000" onchange="saveConfig()" class="glass-input w-full p-2 rounded-xl text-slate-700 font-mono font-bold text-center">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">功耗 (W)</label>
+                            <input type="number" id="power" value="250" onchange="saveConfig()" class="glass-input w-full p-2 rounded-xl text-slate-700 font-mono font-bold text-center">
+                        </div>
+                        <div>
+                            <label class="block text-[10px] font-bold text-slate-400 uppercase mb-1">壽命 (HR)</label>
+                            <input type="number" id="lifespan" value="10000" onchange="saveConfig()" class="glass-input w-full p-2 rounded-xl text-slate-700 font-mono font-bold text-center">
+                        </div>
+                    </div>
+                </details>
+
+                <!-- 3. 歷史紀錄 (折疊) -->
+                <details class="group glass-card rounded-3xl overflow-hidden bg-white/60">
+                    <summary class="flex justify-between items-center p-4 cursor-pointer list-none hover:bg-white/80 transition-colors">
+                        <h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                            <span class="w-1.5 h-1.5 rounded-full bg-slate-400"></span> 歷史紀錄 (<span id="historyCount">0</span>)
+                        </h3>
+                        <i class="fas fa-chevron-down text-slate-400 transition-transform duration-300 group-open:rotate-180"></i>
+                    </summary>
+                    
+                    <div class="p-4 pt-0 border-t border-white/20">
+                        <div class="flex justify-end py-2">
+                            <button onclick="clearHistory()" class="text-[10px] text-rose-400 hover:text-rose-600 font-bold bg-rose-50 px-2 py-1 rounded-md transition-colors">清空全部</button>
+                        </div>
+                        <div id="historyListContainer" class="space-y-1 max-h-60 overflow-y-auto p-1">
+                            <!-- JS 生成 -->
+                        </div>
+                        <div id="noHistory" class="hidden text-center text-slate-400 text-xs py-8">尚無歷史紀錄</div>
+                    </div>
+                </details>
+                
+                <div class="h-10"></div>
+            </div>
+        </div>
+
+        <!-- === 結果卡片 (Modal) === -->
+        <div id="resultModal" class="absolute inset-0 z-50 bg-slate-900/60 backdrop-blur-sm hidden flex items-center justify-center p-6 opacity-0 transition-opacity duration-300">
+            <div id="resultCard" class="bg-white/80 backdrop-blur-xl w-full max-w-sm rounded-[2rem] shadow-[0_20px_60px_rgba(0,0,0,0.3)] border border-white/50 transform scale-90 transition-transform duration-300 overflow-hidden relative">
+                
+                <!-- 裝飾光暈 -->
+                <div class="absolute -top-10 -left-10 w-32 h-32 bg-indigo-400/30 blur-3xl rounded-full pointer-events-none"></div>
+                <div class="absolute -bottom-10 -right-10 w-32 h-32 bg-green-400/30 blur-3xl rounded-full pointer-events-none"></div>
+
+                <!-- 內容 -->
+                <div class="p-8 text-center relative z-10">
+                    <div class="w-12 h-12 bg-green-100 text-green-500 rounded-full flex items-center justify-center mx-auto mb-4 text-xl shadow-inner">
+                        <i class="fas fa-check"></i>
+                    </div>
+                    
+                    <h3 class="text-xs font-bold text-slate-400 uppercase tracking-widest mb-1">建議總報價</h3>
+                    <div class="flex items-center justify-center gap-1 mb-2">
+                        <span class="text-2xl text-slate-400 font-light">NT$</span>
+                        <span class="text-5xl font-extrabold text-slate-800 tracking-tighter" id="finalPrice">0</span>
+                    </div>
+                    <p class="text-sm font-medium text-slate-500 mb-6 truncate px-4" id="resultProjectName">專案名稱</p>
+
+                    <!-- 詳細數據 -->
+                    <div class="bg-white/50 rounded-2xl p-4 space-y-3 text-sm border border-white/60 mb-6">
+                        <div class="flex justify-between text-slate-600">
+                            <span>耗材成本</span>
+                            <span class="font-bold font-mono">NT$ <span id="costMaterial">0</span></span>
+                        </div>
+                        <div class="flex justify-between text-slate-600">
+                            <span>機器成本</span>
+                            <span class="font-bold font-mono">NT$ <span id="costRun">0</span></span>
+                        </div>
+                        <div class="h-px bg-slate-200/50 w-full"></div>
+                        <div class="flex justify-between text-green-600 font-bold">
+                            <span>預估淨利 (<span id="resultMargin">0</span>x)</span>
+                            <span class="font-mono">+NT$ <span id="estimatedProfit">0</span></span>
+                        </div>
+                    </div>
+
+                    <button onclick="closeModal()" class="w-full bg-slate-800 hover:bg-slate-900 text-white font-bold py-3.5 rounded-xl shadow-lg transition-all">
+                        完成
+                    </button>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // --- 隨機背景顏色 (升級版) ---
+        function setRandomBackground() {
+            const blobs = document.querySelectorAll('.blob');
+            const blobCont = document.getElementById('blobContainer');
+            
+            const getRandomPastel = () => {
+                const h = Math.floor(Math.random() * 360);
+                const s = 70 + Math.floor(Math.random() * 25); // 飽和度 70-95%
+                const l = 80 + Math.floor(Math.random() * 15); // 亮度 80-95%
+                return `hsl(${h}, ${s}%, ${l}%)`;
+            };
+
+            const baseColor = getRandomPastel();
+            // 同步 html 背景色，確保上下滾動無縫
+            document.documentElement.style.backgroundColor = baseColor;
+            blobCont.style.background = baseColor;
+
+            blobs.forEach(blob => {
+                // 隨機大小 (30vw - 70vw)
+                const size = 30 + Math.random() * 40;
+                blob.style.width = `${size}vw`;
+                blob.style.height = `${size}vw`;
+                
+                // 隨機雙色漸層
+                const color1 = getRandomPastel();
+                const color2 = getRandomPastel();
+                const angle = Math.floor(Math.random() * 360);
+                blob.style.background = `linear-gradient(${angle}deg, ${color1}, ${color2})`;
+            });
+        }
+
+        // --- UI Interactions ---
+        function openSettings() {
+            const main = document.getElementById('mainPage');
+            const settings = document.getElementById('settingsPage');
+            main.style.transform = 'scale(0.95)';
+            main.style.opacity = '0.5';
+            settings.classList.remove('translate-x-full'); 
+            renderHistoryList(); 
+        }
+
+        function closeSettings() {
+            const main = document.getElementById('mainPage');
+            const settings = document.getElementById('settingsPage');
+            main.style.transform = 'scale(1)';
+            main.style.opacity = '1';
+            settings.classList.add('translate-x-full'); 
+        }
+
+        function syncSlider(val) { 
+            document.getElementById('profitSlider').value = val;
+            saveConfig();
+        }
+        function syncInput(val) { 
+            document.getElementById('profitInput').value = val;
+            saveConfig();
+        }
+
+        // --- Data Logic ---
+        let materials = [];
+        let quoteHistory = []; 
+        let editingIndex = null;
+        let config = {
+            elecRate: 2.45,
+            machineCost: 15000,
+            power: 250,
+            lifespan: 10000,
+            multiplier: 21
+        };
+        
+        window.onload = function() {
+            setRandomBackground(); // 啟動隨機背景
+            loadData();
+            resetPrintRows(); 
+        };
+
+        function loadData() {
+            // Load Config
+            const savedConfig = localStorage.getItem('bambu_config_v1');
+            if (savedConfig) {
+                config = { ...config, ...JSON.parse(savedConfig) };
+            }
+            
+            // Apply Config to DOM
+            document.getElementById('elecRate').value = config.elecRate;
+            document.getElementById('machineCost').value = config.machineCost;
+            document.getElementById('power').value = config.power;
+            document.getElementById('lifespan').value = config.lifespan;
+            document.getElementById('profitInput').value = config.multiplier;
+            document.getElementById('profitSlider').value = config.multiplier;
+
+            // Load Materials
+            const savedMats = localStorage.getItem('bambu_materials_v4');
+            materials = savedMats ? JSON.parse(savedMats) : [];
+            
+            // Load History
+            const savedHistory = localStorage.getItem('bambu_quote_history');
+            quoteHistory = savedHistory ? JSON.parse(savedHistory) : [];
+
+            renderDatabaseList();
+            renderHistoryList();
+            updateBadge();
+        }
+
+        function updateBadge() {
+            const badge = document.getElementById('settingsBadge');
+            if (quoteHistory.length > 0) {
+                badge.classList.remove('hidden');
+                badge.innerText = quoteHistory.length > 99 ? '99+' : quoteHistory.length;
+            } else {
+                badge.classList.add('hidden');
+            }
+        }
+
+        function saveConfig() {
+            config.elecRate = parseFloat(document.getElementById('elecRate').value) || 0;
+            config.machineCost = parseFloat(document.getElementById('machineCost').value) || 0;
+            config.power = parseFloat(document.getElementById('power').value) || 0;
+            config.lifespan = parseFloat(document.getElementById('lifespan').value) || 0;
+            config.multiplier = parseFloat(document.getElementById('profitInput').value) || 1;
+            
+            localStorage.setItem('bambu_config_v1', JSON.stringify(config));
+        }
+
+        function saveMaterials() {
+            localStorage.setItem('bambu_materials_v4', JSON.stringify(materials));
+            renderDatabaseList();
+            refreshAllDropdowns();
+        }
+
+        function saveHistory() {
+            localStorage.setItem('bambu_quote_history', JSON.stringify(quoteHistory));
+            renderHistoryList();
+            updateBadge();
+        }
+
+        // --- Render Lists ---
+        function renderDatabaseList() {
+            const container = document.getElementById('materialListContainer');
+            const countDisplay = document.getElementById('materialCount');
+            container.innerHTML = '';
+            countDisplay.innerText = `${materials.length} 筆`;
+
+            if (materials.length === 0) {
+                container.innerHTML = `<div class="text-center text-slate-400 text-[10px] py-4">尚無資料</div>`;
+                return;
+            }
+
+            materials.forEach((mat, index) => {
+                const div = document.createElement('div');
+                div.className = "flex justify-between items-center bg-white/60 p-2.5 rounded-xl border border-white/40 group hover:bg-white/80 transition-all";
+                div.innerHTML = `
+                    <div class="flex-grow">
+                        <div class="font-bold text-slate-700 text-sm">${mat.vendor} <span class="font-normal text-slate-500">${mat.name}</span></div>
+                        <div class="text-[10px] text-indigo-400 font-mono mt-0.5">NT$ ${mat.price}</div>
+                    </div>
+                    <div class="flex gap-2 opacity-60 group-hover:opacity-100">
+                        <button onclick="editMaterial(${index})" class="text-indigo-500 hover:scale-110 transition-transform"><i class="fas fa-pen"></i></button>
+                        <button onclick="deleteMaterial(${index})" class="text-rose-400 hover:scale-110 transition-transform"><i class="fas fa-trash-alt"></i></button>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        function renderHistoryList() {
+            const container = document.getElementById('historyListContainer');
+            const countDisplay = document.getElementById('historyCount');
+            const noHistory = document.getElementById('noHistory');
+            
+            container.innerHTML = '';
+            // 修正：檢查 countDisplay 是否存在再設定 innerText
+            if (countDisplay) {
+                countDisplay.innerText = quoteHistory.length;
+            }
+
+            if (quoteHistory.length === 0) {
+                if (noHistory) noHistory.classList.remove('hidden');
+                return;
+            } else {
+                if (noHistory) noHistory.classList.add('hidden');
+            }
+
+            [...quoteHistory].reverse().forEach((item, index) => {
+                const realIndex = quoteHistory.length - 1 - index;
+                const div = document.createElement('div');
+                div.className = "flex justify-between items-center bg-white/40 p-3 rounded-xl border border-white/20 mb-2 hover:bg-white/60 transition-colors";
+                div.innerHTML = `
+                    <div class="flex-grow min-w-0">
+                        <div class="font-bold text-slate-700 truncate text-sm">${item.projectName || '未命名'}</div>
+                        <div class="text-[10px] text-slate-400 mt-0.5">
+                            ${item.date} • <span class="text-green-600 font-bold">NT$${item.finalPrice}</span>
+                        </div>
+                    </div>
+                    <button onclick="deleteHistory(${realIndex})" class="text-slate-300 hover:text-rose-400 p-2 transition-colors">
+                        <i class="fas fa-times"></i>
+                    </button>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        // --- CRUD Logic ---
+        function deleteMaterial(index) {
+            if(confirm("確定刪除此耗材？")) {
+                materials.splice(index, 1);
+                saveMaterials();
+                if (editingIndex === index) resetForm();
+            }
+        }
+        
+        function deleteHistory(index) {
+            if(confirm("確定刪除此紀錄？")) {
+                quoteHistory.splice(index, 1);
+                saveHistory();
+            }
+        }
+        
+        function clearHistory() {
+            if(quoteHistory.length === 0) return;
+            if(confirm("確定清空所有紀錄？")) {
+                quoteHistory = [];
+                saveHistory();
+            }
+        }
+
+        function handleMaterialSubmit() {
+            const vendor = document.getElementById('newMatVendor').value.trim();
+            const name = document.getElementById('newMatName').value.trim();
+            const price = parseFloat(document.getElementById('newMatPrice').value);
+
+            if (!vendor || !name || isNaN(price)) { alert("請填寫所有欄位"); return; }
+
+            if (editingIndex !== null) {
+                materials[editingIndex] = { vendor, name, price };
+            } else {
+                materials.push({ vendor, name, price });
+            }
+            saveMaterials();
+            resetForm();
+        }
+
+        function editMaterial(index) {
+            const mat = materials[index];
+            document.getElementById('newMatVendor').value = mat.vendor;
+            document.getElementById('newMatName').value = mat.name;
+            document.getElementById('newMatPrice').value = mat.price;
+            editingIndex = index;
+            
+            document.getElementById('formTitle').innerText = "編輯中";
+            document.getElementById('formTitle').className = "text-[10px] font-bold text-indigo-600 uppercase";
+            document.getElementById('addBtn').innerHTML = '<i class="fas fa-save"></i>';
+            document.getElementById('cancelEditBtn').classList.remove('hidden');
+        }
+
+        function resetForm() {
+            document.getElementById('newMatVendor').value = '';
+            document.getElementById('newMatName').value = '';
+            document.getElementById('newMatPrice').value = '';
+            editingIndex = null;
+            document.getElementById('formTitle').innerText = "新增耗材";
+            document.getElementById('formTitle').className = "text-[10px] font-bold text-indigo-500 uppercase";
+            document.getElementById('addBtn').innerHTML = '<i class="fas fa-plus"></i>';
+            document.getElementById('cancelEditBtn').classList.add('hidden');
+        }
+
+        // --- Print Row Logic ---
+        function addPrintRow() {
+            const container = document.getElementById('printRowsContainer');
+            const rowId = 'row-' + Date.now();
+            const div = document.createElement('div');
+            div.className = "flex gap-2 items-center animate-fade-in";
+            div.id = rowId;
+            div.innerHTML = `
+                <div class="flex-grow bg-white/40 rounded-xl p-1 border border-white/30 flex items-center shadow-inner">
+                    <select class="material-select w-full bg-transparent text-sm text-slate-700 p-2 outline-none" onchange="updateRowCost('${rowId}')"></select>
+                </div>
+                <div class="relative w-20 flex-shrink-0">
+                    <input type="number" class="weight-input w-full p-2.5 pl-3 pr-6 bg-white/40 border border-white/30 rounded-xl text-sm font-bold text-slate-700 text-center outline-none focus:bg-white/60 transition-colors" placeholder="0" oninput="updateRowCost('${rowId}')">
+                    <span class="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-slate-400 font-bold pointer-events-none">g</span>
+                </div>
+                <button onclick="removeRow('${rowId}')" class="w-8 h-8 rounded-full flex items-center justify-center text-slate-300 hover:text-rose-400 hover:bg-rose-50 transition-all flex-shrink-0">
+                    <i class="fas fa-times"></i>
+                </button>
+            `;
+            container.appendChild(div);
+            populateSelect(div.querySelector('.material-select'));
+        }
+
+        function resetPrintRows() {
+            document.getElementById('printRowsContainer').innerHTML = '';
+            addPrintRow();
+            updateTotalWeight();
+            document.getElementById('projectName').value = ''; 
+        }
+
+        function removeRow(rowId) {
+            const container = document.getElementById('printRowsContainer');
+            if (container.children.length <= 1) {
+                document.getElementById(rowId).querySelector('.weight-input').value = '';
+                updateRowCost(rowId);
+                return;
+            }
+            document.getElementById(rowId).remove();
+            updateTotalWeight();
+        }
+
+        function populateSelect(selectElement) {
+            selectElement.innerHTML = '';
+            if (materials.length === 0) {
+                const opt = document.createElement('option');
+                opt.text = "無資料 (請至設定新增)";
+                opt.value = 0;
+                selectElement.appendChild(opt);
+                return;
+            }
+            materials.forEach(mat => {
+                const opt = document.createElement('option');
+                opt.value = mat.price;
+                opt.text = `${mat.vendor} ${mat.name}`;
+                selectElement.appendChild(opt);
+            });
+        }
+
+        function refreshAllDropdowns() {
+            document.querySelectorAll('.material-select').forEach(sel => {
+                const idx = sel.selectedIndex;
+                populateSelect(sel);
+                sel.selectedIndex = (idx >= 0 && idx < sel.options.length) ? idx : 0;
+            });
+        }
+
+        function updateRowCost(rowId) { updateTotalWeight(); }
+
+        function updateTotalWeight() {
+            let total = 0;
+            document.querySelectorAll('.weight-input').forEach(input => {
+                total += parseFloat(input.value) || 0;
+            });
+            document.getElementById('totalWeightDisplay').innerText = total.toFixed(2);
+        }
+
+        // --- Calculation ---
+        function calculate() {
+            let totalMaterialCost = 0;
+            let totalWeight = 0;
+            
+            const rows = document.getElementById('printRowsContainer').children;
+            for (let row of rows) {
+                const select = row.querySelector('.material-select');
+                const input = row.querySelector('.weight-input');
+                const price = parseFloat(select.value) || 0;
+                const weight = parseFloat(input.value) || 0;
+                totalMaterialCost += (price / 1000) * weight;
+                totalWeight += weight;
+            }
+
+            const elecRate = parseFloat(document.getElementById('elecRate').value) || 0;
+            const power = parseFloat(document.getElementById('power').value) || 0;
+            const machineCost = parseFloat(document.getElementById('machineCost').value) || 0;
+            const lifespan = parseFloat(document.getElementById('lifespan').value) || 1;
+            const hours = parseFloat(document.getElementById('printHours').value) || 0;
+            const minutes = parseFloat(document.getElementById('printMinutes').value) || 0;
+            const printTime = hours + (minutes / 60);
+
+            if (totalWeight === 0 && printTime === 0) {
+                alert("請輸入耗材重量與列印時間");
+                return;
+            }
+
+            const costElec = (power / 1000) * printTime * elecRate;
+            const costDepreciation = (machineCost / lifespan) * printTime;
+            const costRun = costElec + costDepreciation;
+            const baseCost = totalMaterialCost + costRun;
+            const multiplier = parseFloat(document.getElementById('profitInput').value) || 1;
+            const finalPrice = baseCost * multiplier;
+            const profit = finalPrice - baseCost;
+            
+            let projectName = document.getElementById('projectName').value.trim();
+            if (!projectName) {
+                const now = new Date();
+                projectName = `報價單 ${now.getMonth()+1}/${now.getDate()} ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`;
+            }
+
+            const newQuote = {
+                projectName: projectName,
+                finalPrice: finalPrice.toFixed(2),
+                date: new Date().toLocaleString('zh-TW', { hour12: false, month: '2-digit', day: '2-digit', hour: '2-digit', minute:'2-digit' })
+            };
+            quoteHistory.push(newQuote);
+            saveHistory();
+
+            document.getElementById('resultProjectName').innerText = projectName;
+            document.getElementById('costMaterial').innerText = totalMaterialCost.toFixed(2);
+            document.getElementById('costRun').innerText = costRun.toFixed(2);
+            document.getElementById('estimatedProfit').innerText = profit.toFixed(2);
+            document.getElementById('resultMargin').innerText = multiplier.toFixed(1); 
+            
+            animateValue("finalPrice", 0, finalPrice, 800);
+            openModal();
+        }
+
+        // --- Modal & Animations ---
+        function openModal() {
+            const modal = document.getElementById('resultModal');
+            const card = document.getElementById('resultCard');
+            modal.classList.remove('hidden');
+            // Trigger reflow
+            void modal.offsetWidth;
+            modal.classList.remove('opacity-0');
+            card.classList.remove('scale-90');
+            card.classList.add('scale-100');
+        }
+
+        function closeModal() {
+            const modal = document.getElementById('resultModal');
+            const card = document.getElementById('resultCard');
+            modal.classList.add('opacity-0');
+            card.classList.remove('scale-100');
+            card.classList.add('scale-90');
+            setTimeout(() => { modal.classList.add('hidden'); }, 300);
+        }
+
+        function animateValue(id, start, end, duration) {
+            let startTimestamp = null;
+            const step = (timestamp) => {
+                if (!startTimestamp) startTimestamp = timestamp;
+                const progress = Math.min((timestamp - startTimestamp) / duration, 1);
+                const easeProgress = 1 - Math.pow(1 - progress, 4);
+                document.getElementById(id).innerHTML = (easeProgress * (end - start) + start).toFixed(2);
+                if (progress < 1) window.requestAnimationFrame(step);
+            };
+            window.requestAnimationFrame(step);
+        }
+    </script>
+</body>
+</html>
